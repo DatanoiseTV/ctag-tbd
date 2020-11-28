@@ -54,6 +54,8 @@ namespace CTAG {
 
             static void setupI2SWM8978();
 
+            static void setupI2SAK4552();
+
             static spi_device_handle_t codec_h;
             static spi_transaction_t trans;
             static spi_bus_config_t buscfg;

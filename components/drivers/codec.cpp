@@ -133,6 +133,57 @@ void Codec::setupI2SWM8731() {
     i2s_set_pin(I2S_NUM_0, &pin_config);
 }
 
+
+void Codec::setupI2SAK4552() {
+    ESP_LOGI("AK4556", "Initializing CODEC I2S");
+    // allow GPIO0 to be clock out
+    gpio_config_t io_conf;
+    io_conf.intr_type = (gpio_int_type_t) GPIO_PIN_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = 1 << GPIO_NUM_0;
+    io_conf.pull_down_en = (gpio_pulldown_t) 0;
+    io_conf.pull_up_en = (gpio_pullup_t) 0;
+    gpio_config(&io_conf);
+    gpio_set_level(GPIO_NUM_0, 0);
+
+
+    // PDN - Enable Codec
+    gpio_set_direction(GPIO_NUM_27, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_27, 0);
+
+    static i2s_config_t i2s_config;
+    memset(&i2s_config, 0, sizeof(i2s_config));
+    i2s_config.mode = (i2s_mode_t) (I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX);
+    i2s_config.sample_rate = 44100;
+    i2s_config.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
+    i2s_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+    i2s_config.communication_format = (i2s_comm_format_t) (I2S_COMM_FORMAT_PCM);
+    i2s_config.intr_alloc_flags = ESP_INTR_FLAG_IRAM | ESP_INTR_FLAG_LEVEL3; // default interrupt priority would be 0
+    i2s_config.dma_buf_count = 4;
+    i2s_config.dma_buf_len = 32;
+    i2s_config.use_apll = true;
+
+    static i2s_pin_config_t pin_config;
+    memset(&pin_config, 0, sizeof(pin_config));
+    pin_config.bck_io_num = GPIO_NUM_26;
+    pin_config.ws_io_num = GPIO_NUM_25;
+    pin_config.data_out_num = GPIO_NUM_22;
+    pin_config.data_in_num = GPIO_NUM_19;
+
+
+    i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);   //install and start i2s driver
+
+    i2s_set_pin(I2S_NUM_0, &pin_config);
+
+    // output master clock on GPIO0
+    PIN_FUNC_SELECT(PERIPHS_IO_MUX_GPIO0_U, FUNC_GPIO0_CLK_OUT1);
+    SET_PERI_REG_BITS(PIN_CTRL, CLK_OUT1, 0, CLK_OUT1_S);
+
+
+    gpio_set_level(GPIO_NUM_27, 1);
+}
+
+
 void Codec::InitCodec() {
     initSPI();
 #ifdef CONFIG_CODEC_IC_WM8731
@@ -147,6 +198,8 @@ void Codec::InitCodec() {
 #elif CONFIG_CODEC_IC_WM8978
     setupSPIWM8978();
     setupI2SWM8978();
+#elif CONFIG_CODEC_IC_AK4552
+    setupI2SAK4552();
 #endif
     isReady = true;
 }
@@ -249,6 +302,18 @@ void IRAM_ATTR Codec::ReadBuffer(float *buf, uint32_t sz) {
         *buf++ = div * (float) *ptrTmp++;
         sz--;
     }
+#elif CONFIG_CODEC_IC_AK4552
+    int32_t tmp[sz * 2];
+    int32_t *ptrTmp = tmp;
+    size_t nb;
+    const float div = 0.0000000004656612873077392578125f;
+    // 32 bit word config
+    i2s_read(I2S_NUM_0, tmp, sz * 4 * 2, &nb, portMAX_DELAY);
+    while(sz > 0){
+        *buf++ = div * (float) *ptrTmp++;
+        *buf++ = div * (float) *ptrTmp++;
+        sz--;
+    }
 #endif
 }
 
@@ -287,6 +352,25 @@ void IRAM_ATTR Codec::WriteBuffer(float *buf, uint32_t sz) {
         tmp[i * 2 + 1] = tmp2;
     }
     i2s_write(I2S_NUM_0, tmp, sz * 2 * 2, &nb, portMAX_DELAY);
+#elif CONFIG_CODEC_IC_AK4552
+    int32_t tmp[sz * 2];
+    int32_t tmp2;
+    size_t nb;
+    const float mult = 8388608.f;
+    // 32 bit word config
+    for (int i = 0; i < sz; i++) {
+        tmp2 = (int32_t) (mult * buf[i * 2]);
+        tmp2 = MAX(tmp2, -8388608);
+        tmp2 = MIN(tmp2, 8388607);
+        tmp[i * 2] = tmp2 << 8;
+        tmp2 = (int32_t) (mult * buf[i * 2 + 1]);
+        tmp2 = MAX(tmp2, -8388608);
+        tmp2 = MIN(tmp2, 8388607);
+        tmp[i * 2 + 1] = tmp2 << 8;
+    }
+    i2s_write(I2S_NUM_0, tmp, sz * 4 * 2, &nb, portMAX_DELAY);
+#else
+#error "NO CODEC"
 #endif
 }
 
